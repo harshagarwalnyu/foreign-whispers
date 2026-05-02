@@ -17,13 +17,15 @@ RUN groupadd --gid $USER_GID $USERNAME \
     && useradd -s /bin/bash --uid $USER_UID --gid $USER_GID -m $USERNAME
 
 # Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN curl -fsSL https://astral.sh/uv/install.sh | sh && \
+    mv /root/.local/bin/uv /usr/local/bin/uv && \
+    mv /root/.local/bin/uvx /usr/local/bin/uvx
 
 # Install dependencies as root, then hand ownership to appuser
 WORKDIR /app
 COPY --chown=$USERNAME:$USERNAME pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project && \
+    uv sync --frozen --no-dev --no-group gpu --no-install-project && \
     chown -R $USERNAME:$USERNAME /app
 
 COPY --chown=$USERNAME:$USERNAME . .

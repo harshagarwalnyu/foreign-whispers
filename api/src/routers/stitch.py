@@ -231,7 +231,7 @@ async def stitch_endpoint(
 
     audio_path = settings.tts_audio_dir / config / f"{title}.wav"
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(
         None,
         functools.partial(
@@ -300,7 +300,12 @@ async def get_video(
 
     video_path = settings.dubbed_videos_dir / config / f"{title}.mp4"
     if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Dubbed video not yet generated")
+        # Legacy flat directory fallback: dubbed_videos/<title>.mp4
+        legacy_path = settings.dubbed_videos_dir / f"{title}.mp4"
+        if legacy_path.exists():
+            video_path = legacy_path
+        else:
+            raise HTTPException(status_code=404, detail="Dubbed video not yet generated")
 
     return _serve_video(video_path, request)
 

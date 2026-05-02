@@ -1,6 +1,5 @@
 """Tests for api/src/ package scaffold (issue b54.4)."""
 
-import importlib
 import os
 
 import pytest
@@ -90,11 +89,9 @@ class TestAppFactory:
 
     @pytest.fixture()
     def app(self, monkeypatch):
-        # Stub heavy model loading
-        from unittest.mock import MagicMock
-
-        monkeypatch.setattr("whisper.load_model", lambda *a, **kw: MagicMock())
-        monkeypatch.setattr("TTS.api.TTS", lambda *a, **kw: MagicMock())
+        # Stub heavy model loading (only when the GPU packages are installed)
+        from tests.conftest import stub_gpu_models
+        stub_gpu_models(monkeypatch)
 
         from api.src.main import create_app
 

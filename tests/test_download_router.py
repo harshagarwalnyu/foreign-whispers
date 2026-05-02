@@ -20,8 +20,8 @@ def ui_dir(tmp_path):
 @pytest.fixture()
 def client(monkeypatch, ui_dir):
     """Test client with models and download functions stubbed."""
-    monkeypatch.setattr("whisper.load_model", lambda *a, **kw: MagicMock())
-    monkeypatch.setattr("TTS.api.TTS", lambda *a, **kw: MagicMock())
+    from tests.conftest import stub_gpu_models
+    stub_gpu_models(monkeypatch)
 
     # Patch settings so file I/O goes to tmp_path
     from api.src.core.config import settings

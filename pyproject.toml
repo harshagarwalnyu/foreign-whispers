@@ -5,33 +5,37 @@ description = "Foreign Whispers: YouTube video dubbing pipeline (download, trans
 license = { text = "LicenseRef-AGPL-3.0-only-with-Commons-Clause" }
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "torch>=2.0",
-    "torchaudio>=2.0",
-    "TTS>=0.22.0",
-    "yt-dlp",
-    "youtube-transcript-api",
-    "openai-whisper",
+    "yt-dlp>=2026.3.17",
+    "youtube-transcript-api>=1.2.4",
     "moviepy<2",
-    "argostranslate",
-    "streamlit",
-    "fastapi>=0.115",
-    "uvicorn[standard]",
-    "python-multipart",
-    "pydantic-settings",
-    "pyrubberband",
-    "librosa",
-    "soundfile",
-    "pydub",
-    "requests",
+    "argostranslate>=1.11.0",
+    "fastapi>=0.135",
+    "uvicorn[standard]>=0.42.0",
+    "python-multipart>=0.0.22",
+    "pydantic-settings>=2.13",
+    "pyrubberband>=0.4.0",
+    "librosa>=0.11.0",
+    "soundfile>=0.13.1",
+    "pydub>=0.25.1",
+    "requests>=2.33.0",
     "setuptools<81",
     "pyyaml>=6.0.3",
-    "logfire",
+    "logfire>=4.0",
+    "ipykernel>=7.2.0",
+    "matplotlib>=3.10.8",
 ]
 
 [dependency-groups]
+gpu = [
+    "torch>=2.11",
+    "torchaudio>=2.11",
+    "TTS>=0.22.0",
+    "openai-whisper",
+    "streamlit>=1.55.0",
+]
 dev = [
-    "pytest",
-    "httpx",
+    "pytest>=9.0",
+    "httpx>=0.28",
     "nbconvert>=7.17.0",
 ]
 alignment = [

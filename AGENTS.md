@@ -12,6 +12,14 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Aegean AI Context
+
+Before starting substantial work, read `docs/aegean-ai-deliverables.md`.
+The full aegean.ai sitemap snapshot lives in `docs/aegean-ai-site-links.txt`.
+
+These files are context only. Use `bd` for all task tracking. Do not create
+markdown TODO lists or other parallel trackers.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.

@@ -19,8 +19,8 @@ def ui_dir(tmp_path):
 @pytest.fixture()
 def client(monkeypatch, ui_dir):
     """Test client with models stubbed."""
-    monkeypatch.setattr("whisper.load_model", lambda *a, **kw: MagicMock())
-    monkeypatch.setattr("TTS.api.TTS", lambda *a, **kw: MagicMock())
+    from tests.conftest import stub_gpu_models
+    stub_gpu_models(monkeypatch)
 
     from api.src.core.config import settings
 
@@ -31,6 +31,14 @@ def client(monkeypatch, ui_dir):
 
     with TestClient(app) as c:
         yield c
+
+
+def _patch_resolve_title(monkeypatch, title="Test Title"):
+    """Patch resolve_title in the transcribe router to return a fixed title."""
+    monkeypatch.setattr(
+        "api.src.routers.transcribe.resolve_title",
+        lambda vid: title,
+    )
 
 
 def _make_whisper_result():
@@ -45,14 +53,9 @@ def _make_whisper_result():
 
 def test_transcribe_returns_segments(client, monkeypatch, ui_dir):
     """POST /api/transcribe/{video_id} returns structured segments."""
+    _patch_resolve_title(monkeypatch)
     # Create a fake video file matching the expected pattern
     (ui_dir / "videos" / "Test Title.mp4").write_bytes(b"fake-video")
-
-    # Mock title_for_video_id on the TranscriptionService class
-    monkeypatch.setattr(
-        "api.src.services.transcription_service.TranscriptionService.title_for_video_id",
-        lambda self_or_vid, vid_or_dir, search_dir=None: "Test Title",
-    )
 
     # Mock whisper transcribe on the model stored in app.state
     from api.src.main import app
@@ -70,12 +73,8 @@ def test_transcribe_returns_segments(client, monkeypatch, ui_dir):
 
 def test_transcribe_saves_json(client, monkeypatch, ui_dir):
     """Transcription result is persisted to transcriptions/whisper/{title}.json."""
+    _patch_resolve_title(monkeypatch)
     (ui_dir / "videos" / "Test Title.mp4").write_bytes(b"fake-video")
-
-    monkeypatch.setattr(
-        "api.src.services.transcription_service.TranscriptionService.title_for_video_id",
-        lambda self_or_vid, vid_or_dir, search_dir=None: "Test Title",
-    )
 
     from api.src.main import app
 
@@ -91,10 +90,7 @@ def test_transcribe_saves_json(client, monkeypatch, ui_dir):
 
 def test_transcribe_skips_if_cached(client, monkeypatch, ui_dir):
     """If transcription JSON already exists, don't re-run Whisper."""
-    monkeypatch.setattr(
-        "api.src.services.transcription_service.TranscriptionService.title_for_video_id",
-        lambda self_or_vid, vid_or_dir, search_dir=None: "Test Title",
-    )
+    _patch_resolve_title(monkeypatch)
 
     # Pre-populate cached transcription
     cached = ui_dir / "transcriptions" / "whisper" / "Test Title.json"

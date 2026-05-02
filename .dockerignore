@@ -8,4 +8,16 @@ superceded/
 docs/
 *.mov
 *.webm
+*.mp4
+*.wav
+*.mp3
 .env
+frontend/
+frontend/node_modules/
+frontend/.next/
+pipeline_data/api/videos/
+pipeline_data/api/tts_audio/
+pipeline_data/api/dubbed_videos/
+tests/
+notebooks/
+*.ipynb

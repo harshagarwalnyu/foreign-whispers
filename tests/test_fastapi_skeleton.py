@@ -7,12 +7,8 @@ from fastapi.testclient import TestClient
 @pytest.fixture()
 def client(monkeypatch):
     """Create a test client with model loading stubbed out."""
-    import whisper as _whisper_mod  # noqa: F401
-    from unittest.mock import MagicMock
-
-    # Stub heavy model loading so tests run fast
-    monkeypatch.setattr("whisper.load_model", lambda *a, **kw: MagicMock())
-    monkeypatch.setattr("TTS.api.TTS", lambda *a, **kw: MagicMock())
+    from tests.conftest import stub_gpu_models
+    stub_gpu_models(monkeypatch)
 
     from api.src.main import app
 

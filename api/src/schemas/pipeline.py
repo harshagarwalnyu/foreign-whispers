@@ -26,6 +26,7 @@ class PipelineStatus(StrEnum):
     PENDING = "pending"
     DOWNLOADING = "downloading"
     TRANSCRIBING = "transcribing"
+    DIARIZING = "diarizing"
     TRANSLATING = "translating"
     SYNTHESIZING = "synthesizing"
     STITCHING = "stitching"

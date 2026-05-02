@@ -1,9 +1,13 @@
 """Tests for inference layer backends (issue b54.6)."""
 
+import importlib
 from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 import requests
+
+_has_whisper = importlib.util.find_spec("whisper") is not None
+_has_tts = importlib.util.find_spec("TTS") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +60,7 @@ class TestTTSBackendABC:
 # LocalWhisperBackend
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(not _has_whisper, reason="openai-whisper not installed")
 class TestLocalWhisperBackend:
     """LocalWhisperBackend wraps whisper.load_model + model.transcribe."""
 
@@ -95,6 +100,7 @@ class TestLocalWhisperBackend:
 # LocalTTSBackend
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(not _has_tts, reason="TTS not installed")
 class TestLocalTTSBackend:
     """LocalTTSBackend wraps TTS.api.TTS + tts.tts_to_file."""
 
@@ -207,6 +213,7 @@ class TestRemoteTTSBackend:
 class TestBackendSelection:
     """get_whisper_backend / get_tts_backend respect config settings."""
 
+    @pytest.mark.skipif(not _has_whisper, reason="openai-whisper not installed")
     @patch("whisper.load_model", return_value=MagicMock())
     def test_get_whisper_backend_local(self, _mock):
         from api.src.inference import get_whisper_backend
@@ -222,6 +229,7 @@ class TestBackendSelection:
         backend = get_whisper_backend(kind="remote", api_url="http://w:9000")
         assert isinstance(backend, RemoteWhisperBackend)
 
+    @pytest.mark.skipif(not _has_tts, reason="TTS not installed")
     @patch("TTS.api.TTS", return_value=MagicMock())
     def test_get_tts_backend_local(self, _mock):
         from api.src.inference import get_tts_backend

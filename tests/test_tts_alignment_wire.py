@@ -62,7 +62,7 @@ def test_synced_segment_clamp_applied(monkeypatch):
 
 
 def test_text_file_to_speech_calls_alignment(tmp_path):
-    """text_file_to_speech calls _build_alignment and passes its stretch_factor."""
+    """text_file_to_speech calls _build_alignment and uses its stretch_factor in postprocessing."""
     from api.src.services.tts_engine import text_file_to_speech
 
     es_seg = {"start": 0.0, "end": 3.0, "text": "Hola mundo"}
@@ -82,12 +82,12 @@ def test_text_file_to_speech_calls_alignment(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
 
-    called_with_stretch = []
+    postprocess_calls = []
 
-    def fake_synced(engine, text, target_sec, work_dir, stretch_factor=1.0):
-        called_with_stretch.append(stretch_factor)
+    def fake_postprocess(raw_bytes, target_sec, stretch_factor, alignment_enabled, work_dir):
+        postprocess_calls.append(stretch_factor)
         from pydub import AudioSegment
-        return AudioSegment.silent(duration=int(target_sec * 1000)), 1.0, target_sec
+        return (AudioSegment.silent(duration=int(target_sec * 1000)), 1.0, target_sec)
 
     # Patch _build_alignment to return a known stretch_factor so we can verify it propagates
     from foreign_whispers.alignment import AlignAction
@@ -96,12 +96,13 @@ def test_text_file_to_speech_calls_alignment(tmp_path):
     mock_aligned_seg.action = AlignAction.MILD_STRETCH
 
     engine = MagicMock()
-    with patch("api.src.services.tts_engine._synced_segment_audio", side_effect=fake_synced), \
+    with patch("api.src.services.tts_engine._postprocess_segment", side_effect=fake_postprocess), \
+         patch("api.src.services.tts_engine._synthesize_raw", return_value=b"fakewav"), \
          patch("api.src.services.tts_engine._build_alignment", return_value=([], {0: mock_aligned_seg})):
         text_file_to_speech(str(es_path), str(out_dir), tts_engine=engine)
 
-    assert len(called_with_stretch) == 1
-    assert called_with_stretch[0] == pytest.approx(1.2, abs=0.01)  # propagated from align_map
+    assert len(postprocess_calls) == 1
+    assert postprocess_calls[0] == pytest.approx(1.2, abs=0.01)  # propagated from align_map
 
 
 def test_text_file_to_speech_missing_en_transcript(tmp_path):
@@ -119,21 +120,22 @@ def test_text_file_to_speech_missing_en_transcript(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
 
-    called_with_stretch = []
+    postprocess_calls = []
 
-    def fake_synced(engine, text, target_sec, work_dir, stretch_factor=1.0):
-        called_with_stretch.append(stretch_factor)
+    def fake_postprocess(raw_bytes, target_sec, stretch_factor, alignment_enabled, work_dir):
+        postprocess_calls.append(stretch_factor)
         from pydub import AudioSegment
-        return AudioSegment.silent(duration=int(target_sec * 1000)), 1.0, target_sec
+        return (AudioSegment.silent(duration=int(target_sec * 1000)), 1.0, target_sec)
 
     engine = MagicMock()
-    with patch("api.src.services.tts_engine._synced_segment_audio", side_effect=fake_synced):
+    with patch("api.src.services.tts_engine._postprocess_segment", side_effect=fake_postprocess), \
+         patch("api.src.services.tts_engine._synthesize_raw", return_value=b"fakewav"):
         text_file_to_speech(str(es_path), str(out_dir), tts_engine=engine)
 
     # Synthesis ran even without EN transcript
-    assert len(called_with_stretch) == 1
+    assert len(postprocess_calls) == 1
     # Fallback: stretch_factor = 1.0 (no alignment)
-    assert called_with_stretch[0] == pytest.approx(1.0, abs=0.01)
+    assert postprocess_calls[0] == pytest.approx(1.0, abs=0.01)
     # WAV was written
     assert (out_dir / f"{title}.wav").exists()
 

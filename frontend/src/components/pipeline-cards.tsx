@@ -14,6 +14,7 @@ import {
   LanguagesIcon,
   ActivityIcon,
   FilmIcon,
+  UsersIcon,
 } from "lucide-react";
 import { useElapsed } from "@/hooks/use-elapsed";
 import type {
@@ -21,6 +22,7 @@ import type {
   PipelineStage,
   TranscribeResponse,
   TranslateResponse,
+  DiarizeResponse,
   DownloadResponse,
 } from "@/lib/types";
 
@@ -36,7 +38,7 @@ function formatDuration(ms: number): string {
 }
 
 function getActiveStageStartedAt(state: PipelineState): number | undefined {
-  const stages: PipelineStage[] = ["download", "transcribe", "translate", "tts", "stitch"];
+  const stages: PipelineStage[] = ["download", "transcribe", "diarize", "translate", "tts", "stitch"];
   for (const key of stages) {
     if (state.stages[key].status === "active") return state.stages[key].started_at;
   }
@@ -76,6 +78,7 @@ export function PipelineCards({ pipelineState }: PipelineCardsProps) {
 
   const downloadResult = pipelineState.stages.download.result as DownloadResponse | undefined;
   const transcribeResult = pipelineState.stages.transcribe.result as TranscribeResponse | undefined;
+  const diarizeResult = pipelineState.stages.diarize.result as DiarizeResponse | undefined;
   const translateResult = pipelineState.stages.translate.result as TranslateResponse | undefined;
 
   // Segments count
@@ -85,9 +88,6 @@ export function PipelineCards({ pipelineState }: PipelineCardsProps) {
   const speechDuration = transcribeResult?.segments?.length
     ? transcribeResult.segments[transcribeResult.segments.length - 1].end
     : undefined;
-
-  // Caption count from download
-  const captionCount = downloadResult?.caption_segments?.length;
 
   // Translation word count
   const translationWordCount = translateResult?.text
@@ -117,6 +117,11 @@ export function PipelineCards({ pipelineState }: PipelineCardsProps) {
       icon: ListIcon,
     },
     {
+      label: "Speakers",
+      value: diarizeResult?.speakers?.length != null ? `${diarizeResult.speakers.length}` : "--",
+      icon: UsersIcon,
+    },
+    {
       label: "Speech Duration",
       value: speechDuration != null ? formatTime(speechDuration) : "--",
       icon: ActivityIcon,
@@ -134,7 +139,7 @@ export function PipelineCards({ pipelineState }: PipelineCardsProps) {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-4 px-4 lg:px-6 @xl/main:grid-cols-3 @5xl/main:grid-cols-5">
+    <div className="grid grid-cols-2 gap-4 px-4 lg:px-6 @xl/main:grid-cols-3 @5xl/main:grid-cols-6">
       {metrics.map(({ label, value, icon: Icon, badge }) => (
         <Card key={label} className="@container/card">
           <CardHeader>

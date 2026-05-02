@@ -2,6 +2,7 @@
 
 import logging
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,24 @@ async def lifespan(app: FastAPI):
     This avoids blocking startup in Docker Compose where Whisper and TTS
     inference may be handled by separate containers (speaches, Chatterbox).
     """
+    # Ensure pipeline data directories exist
+    for d in (
+        settings.data_dir,
+        settings.videos_dir,
+        settings.youtube_captions_dir,
+        settings.transcriptions_dir,
+        settings.translations_dir,
+        settings.tts_audio_dir,
+        settings.dubbed_videos_dir,
+        settings.dubbed_captions_dir,
+        settings.diarizations_dir,
+        settings.speakers_dir,
+    ):
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Expose public state attributes for routers/tests while keeping lazy loads.
+    app.state.whisper_model = SimpleNamespace()
+    app.state.tts_model = SimpleNamespace()
     app.state._whisper_model = None
     app.state._tts_model = None
     logger.info("Application ready (models will load on first use).")
@@ -38,31 +57,59 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup
-    if app.state._whisper_model is not None:
+    if hasattr(app.state, "whisper_model"):
+        del app.state.whisper_model
+    if hasattr(app.state, "tts_model"):
+        del app.state.tts_model
+    if hasattr(app.state, "_whisper_model"):
         del app.state._whisper_model
-    if app.state._tts_model is not None:
+    if hasattr(app.state, "_tts_model"):
         del app.state._tts_model
     logger.info("Models unloaded.")
 
 
 def get_whisper_model(app):
     """Lazy-load Whisper model on first use."""
-    if app.state._whisper_model is None:
+    if app.state._whisper_model is not None:
+        return app.state._whisper_model
+
+    if vars(app.state.whisper_model):
+        app.state._whisper_model = app.state.whisper_model
+        return app.state.whisper_model
+
+    if app.state.whisper_model is None:
+        app.state.whisper_model = SimpleNamespace()
+
+    if not vars(app.state.whisper_model):
         logger.info("Loading Whisper model (%s)...", settings.whisper_model)
         import whisper
-        app.state._whisper_model = whisper.load_model(settings.whisper_model)
+        model = whisper.load_model(settings.whisper_model)
+        app.state.whisper_model = model
+        app.state._whisper_model = model
         logger.info("Whisper model loaded.")
-    return app.state._whisper_model
+    return app.state.whisper_model
 
 
 def get_tts_model(app):
     """Lazy-load TTS model on first use."""
-    if app.state._tts_model is None:
+    if app.state._tts_model is not None:
+        return app.state._tts_model
+
+    if vars(app.state.tts_model):
+        app.state._tts_model = app.state.tts_model
+        return app.state.tts_model
+
+    if app.state.tts_model is None:
+        app.state.tts_model = SimpleNamespace()
+
+    if not vars(app.state.tts_model):
         logger.info("Loading TTS model (%s)...", settings.tts_model_name)
         from TTS.api import TTS
-        app.state._tts_model = TTS(model_name=settings.tts_model_name, progress_bar=False)
+        model = TTS(model_name=settings.tts_model_name, progress_bar=False)
+        app.state.tts_model = model
+        app.state._tts_model = model
         logger.info("TTS model loaded.")
-    return app.state._tts_model
+    return app.state.tts_model
 
 
 def create_app() -> FastAPI:
@@ -94,6 +141,8 @@ def create_app() -> FastAPI:
     app.include_router(stitch_router)
     from api.src.routers.eval import router as eval_router
     app.include_router(eval_router)
+    from api.src.routers.diarize import router as diarize_router
+    app.include_router(diarize_router)
 
     @app.get("/healthz")
     async def healthz():

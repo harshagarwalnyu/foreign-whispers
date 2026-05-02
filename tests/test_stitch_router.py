@@ -19,8 +19,8 @@ def ui_dir(tmp_path):
 
 @pytest.fixture()
 def client(monkeypatch, ui_dir):
-    monkeypatch.setattr("whisper.load_model", lambda *a, **kw: MagicMock())
-    monkeypatch.setattr("TTS.api.TTS", lambda *a, **kw: MagicMock())
+    from tests.conftest import stub_gpu_models
+    stub_gpu_models(monkeypatch)
 
     from api.src.core.config import settings
 

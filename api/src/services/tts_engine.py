@@ -9,8 +9,21 @@ import tempfile
 import requests
 import librosa
 import soundfile as sf
-import pyrubberband
 from pydub import AudioSegment
+
+try:
+    import pyrubberband
+    import shutil as _shutil
+    # pyrubberband is a thin wrapper around the `rubberband` CLI binary.
+    # The Python package may install fine even when the binary is absent.
+    _HAS_RUBBERBAND = _shutil.which("rubberband") is not None
+    if not _HAS_RUBBERBAND:
+        _logging.getLogger(__name__).info(
+            "pyrubberband installed but 'rubberband' CLI not found — "
+            "falling back to librosa time_stretch"
+        )
+except (ImportError, OSError):
+    _HAS_RUBBERBAND = False
 
 # ── Chatterbox API configuration ─────────────────────────────────────
 CHATTERBOX_API_URL = os.getenv("CHATTERBOX_API_URL", "http://localhost:8020")
@@ -196,12 +209,15 @@ def files_from_dir(dir_path) -> list:
     return es_files
 
 
-def _synthesize_raw(tts_engine, text: str, wav_path: str) -> bytes | None:
+def _synthesize_raw(tts_engine, text: str, wav_path: str, speaker_wav: str = "") -> bytes | None:
     """GPU-bound: call TTS engine and return raw WAV bytes, or None on failure."""
     if not text or not text.strip():
         return None
     try:
-        tts_engine.tts_to_file(text=text, file_path=wav_path)
+        kwargs = {}
+        if speaker_wav:
+            kwargs["speaker_wav"] = speaker_wav
+        tts_engine.tts_to_file(text=text, file_path=wav_path, **kwargs)
         return pathlib.Path(wav_path).read_bytes()
     except Exception as exc:
         print(f"[tts] TTS failed for segment ({exc}), using silence")
@@ -248,7 +264,11 @@ def _postprocess_segment(raw_wav_bytes: bytes | None, target_sec: float,
         speed_factor = max(SPEED_MIN, min(SPEED_MAX, speed_factor))
 
     if abs(speed_factor - 1.0) > 0.01:
-        y_stretched = pyrubberband.time_stretch(y, sr, speed_factor)
+        if _HAS_RUBBERBAND:
+            y_stretched = pyrubberband.time_stretch(y, sr, speed_factor)
+        else:
+            # Fallback: librosa phase-vocoder stretch (lower quality but no native dep)
+            y_stretched = librosa.effects.time_stretch(y, rate=speed_factor)
     else:
         y_stretched = y
 
@@ -395,7 +415,7 @@ def _compute_speech_offset(source_path: str) -> float:
     return yt_start - whisper_start
 
 
-def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=None):
+def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=None, speaker_wav: str = ""):
     """Read translated JSON with segment timestamps and produce a time-aligned WAV.
 
     Each segment is individually synthesized and time-stretched to match its
@@ -408,8 +428,14 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
 
     *alignment* overrides the module-level ``_ALIGNMENT_ENABLED`` flag.
     Pass True for aligned mode, False for baseline, or None to use the env var.
+
+    *speaker_wav* is a reference WAV path (relative to speakers dir) for voice
+    cloning. When set, passed to the ChatterboxClient for each segment.
     """
     engine = tts_engine if tts_engine is not None else _get_tts_engine()
+    # If a speaker_wav was provided and the engine supports it, configure it
+    if speaker_wav and isinstance(engine, ChatterboxClient):
+        engine = ChatterboxClient(base_url=engine.base_url, speaker_wav=speaker_wav)
     use_alignment = alignment if alignment is not None else _ALIGNMENT_ENABLED
 
     save_name = pathlib.Path(source_path).stem + ".wav"
@@ -464,7 +490,29 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
             "target_sec": target_sec,
             "stretch_factor": stretch_factor,
             "aligned_seg": aligned_seg,
+            "speaker": seg.get("speaker", ""),
         })
+
+    # ── Resolve per-speaker voice WAVs ──────────────────────────────
+    # When segments carry speaker labels (from diarization), map each unique
+    # speaker to a distinct reference WAV for voice cloning.
+    speaker_voice_map: dict[str, str] = {}
+    if speaker_wav:
+        # Single voice for all segments — already set on the engine
+        pass
+    else:
+        # Try to auto-resolve per-speaker voices
+        try:
+            from foreign_whispers.voice_resolution import resolve_speaker_wav
+            speakers_base = pathlib.Path(__file__).parent.parent.parent.parent / "pipeline_data" / "speakers"
+            unique_speakers = {m.get("speaker") for m in seg_metas if m.get("speaker")}
+            for spk in unique_speakers:
+                try:
+                    speaker_voice_map[spk] = resolve_speaker_wav(speakers_base, "es", speaker_id=spk)
+                except FileNotFoundError:
+                    pass
+        except ImportError:
+            pass
 
     # ── Phase 1: GPU synthesis (concurrent) ───────────────────────────
     # Submit all TTS calls to a thread pool so the GPU stays busy while
@@ -475,13 +523,16 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
     raw_wav_map: dict[int, bytes | None] = {}
 
     with tempfile.TemporaryDirectory() as synth_dir:
-        def _do_synth(idx: int, text: str) -> tuple[int, bytes | None]:
+        def _do_synth(idx: int, text: str, seg_speaker_wav: str = "") -> tuple[int, bytes | None]:
             wav_path = str(pathlib.Path(synth_dir) / f"seg_{idx}.wav")
-            return idx, _synthesize_raw(engine, text, wav_path)
+            return idx, _synthesize_raw(engine, text, wav_path, speaker_wav=seg_speaker_wav)
 
         with ThreadPoolExecutor(max_workers=_TTS_WORKERS) as pool:
             futures = {
-                pool.submit(_do_synth, m["index"], m["text"]): m["index"]
+                pool.submit(
+                    _do_synth, m["index"], m["text"],
+                    speaker_voice_map.get(m.get("speaker", ""), ""),
+                ): m["index"]
                 for m in seg_metas
             }
             for fut in as_completed(futures):

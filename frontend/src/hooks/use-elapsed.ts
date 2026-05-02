@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Returns a live elapsed-ms counter that ticks every second while
@@ -8,14 +8,19 @@ import { useEffect, useState } from "react";
  */
 export function useElapsed(startedAt: number | undefined): number | undefined {
   const [elapsed, setElapsed] = useState<number | undefined>(undefined);
+  const startedAtRef = useRef(startedAt);
+  startedAtRef.current = startedAt;
 
   useEffect(() => {
     if (!startedAt) {
       setElapsed(undefined);
       return;
     }
-    setElapsed(Date.now() - startedAt);
-    const id = setInterval(() => setElapsed(Date.now() - startedAt), 1000);
+    const tick = () => {
+      if (startedAtRef.current) setElapsed(Date.now() - startedAtRef.current);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [startedAt]);
 

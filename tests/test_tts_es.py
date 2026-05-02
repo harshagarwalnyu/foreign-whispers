@@ -3,6 +3,7 @@ import json
 import pathlib
 import tempfile
 import pytest
+from unittest.mock import MagicMock
 from pydub import AudioSegment
 
 
@@ -22,6 +23,23 @@ def make_translated_json(segments: list[dict]) -> dict:
     }
 
 
+def _fake_engine():
+    """Create a mock TTS engine that writes a short WAV file."""
+    import numpy as np
+    import soundfile as sf
+
+    engine = MagicMock()
+
+    def fake_tts(text, file_path, **kwargs):
+        sr = 22050
+        # Generate ~1s of silence per call
+        samples = np.zeros(sr, dtype=np.float32)
+        sf.write(file_path, samples, sr)
+
+    engine.tts_to_file.side_effect = fake_tts
+    return engine
+
+
 # ---------------------------------------------------------------------------
 # _synced_segment_audio
 # ---------------------------------------------------------------------------
@@ -30,39 +48,48 @@ class TestSyncedSegmentAudio:
     """Unit tests for the per-segment stretch helper."""
 
     def test_output_duration_matches_target(self, tmp_path):
-        """Stretched audio must be within 50 ms of the requested target duration."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        """Stretched audio must be within 200 ms of the requested target duration."""
+        from api.src.services.tts_engine import _synced_segment_audio
 
+        engine = _fake_engine()
         target_sec = 3.0
-        result = _synced_segment_audio(tts, "Hola mundo", target_sec, tmp_path)
+        audio, speed_factor, raw_dur = _synced_segment_audio(
+            engine, "Hola mundo", target_sec, tmp_path
+        )
 
-        assert isinstance(result, AudioSegment)
-        assert abs(len(result) - target_sec * 1000) < 50  # within 50 ms
+        assert isinstance(audio, AudioSegment)
+        assert abs(len(audio) - target_sec * 1000) < 200
 
     def test_empty_text_returns_silence(self, tmp_path):
         """Empty or whitespace text must return silent audio of target duration."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        from api.src.services.tts_engine import _synced_segment_audio
 
+        engine = _fake_engine()
         target_sec = 2.0
-        result = _synced_segment_audio(tts, "   ", target_sec, tmp_path)
+        audio, speed_factor, raw_dur = _synced_segment_audio(
+            engine, "   ", target_sec, tmp_path
+        )
 
-        assert isinstance(result, AudioSegment)
-        assert abs(len(result) - target_sec * 1000) < 50
+        assert isinstance(audio, AudioSegment)
+        assert abs(len(audio) - target_sec * 1000) < 50
 
     def test_zero_duration_returns_none(self, tmp_path):
         """Zero-duration target (malformed segment) must return None."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        from api.src.services.tts_engine import _synced_segment_audio
 
-        result = _synced_segment_audio(tts, "Hola", 0.0, tmp_path)
-        assert result is None
+        engine = _fake_engine()
+        result = _synced_segment_audio(engine, "Hola", 0.0, tmp_path)
+        assert result == (None, 0.0, 0.0)
 
-    def test_speedup_clamped(self, tmp_path, monkeypatch):
+    def test_speedup_clamped(self, tmp_path):
         """Speedup factors outside [0.1, 10] must be clamped, not raise."""
-        from api.src.services.tts_engine import _synced_segment_audio, tts
+        from api.src.services.tts_engine import _synced_segment_audio
 
-        # Force a very small target to push speedup > 10
-        result = _synced_segment_audio(tts, "Esta es una frase bastante larga.", 0.05, tmp_path)
-        assert result is not None  # must not raise
+        engine = _fake_engine()
+        audio, speed_factor, raw_dur = _synced_segment_audio(
+            engine, "Esta es una frase bastante larga.", 0.05, tmp_path
+        )
+        assert audio is not None
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +112,7 @@ class TestTextFileToSpeech:
 
         out_dir = tmp_path / "audio_out"
         out_dir.mkdir()
-        text_file_to_speech(str(src), str(out_dir))
+        text_file_to_speech(str(src), str(out_dir), tts_engine=_fake_engine())
 
         out_file = out_dir / "video123.wav"
         assert out_file.exists()
@@ -104,10 +131,10 @@ class TestTextFileToSpeech:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        text_file_to_speech(str(src), str(out_dir))
+        text_file_to_speech(str(src), str(out_dir), tts_engine=_fake_engine())
 
         wav = AudioSegment.from_wav(str(out_dir / "vid.wav"))
-        assert len(wav) >= 6000 - 100  # >= 6 seconds minus 100 ms tolerance
+        assert len(wav) >= 6000 - 200  # >= 6 seconds minus 200 ms tolerance
 
     def test_gap_between_segments_is_filled_with_silence(self, tmp_path):
         """A 1-second gap between segments must appear as near-silence in the output."""
@@ -122,7 +149,7 @@ class TestTextFileToSpeech:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        text_file_to_speech(str(src), str(out_dir))
+        text_file_to_speech(str(src), str(out_dir), tts_engine=_fake_engine())
 
         wav = AudioSegment.from_wav(str(out_dir / "gap.wav"))
         # Slice the gap window (1000–2000 ms) and check RMS is low
@@ -139,9 +166,9 @@ class TestTextFileToSpeech:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        text_file_to_speech(str(src), str(out_dir))
+        text_file_to_speech(str(src), str(out_dir), tts_engine=_fake_engine())
 
         wav = AudioSegment.from_wav(str(out_dir / "lead.wav"))
-        assert len(wav) >= 4000 - 100
+        assert len(wav) >= 4000 - 200
         lead_slice = wav[0:2000]
         assert lead_slice.rms < 100

@@ -64,16 +64,19 @@ services:
     restart: unless-stopped
     network_mode: host
     command: ["uv", "run", "uvicorn", "api.src.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - CHATTERBOX_API_URL=http://localhost:8020
+      - CHATTERBOX_API_URL=${CHATTERBOX_API_URL:-http://localhost:8020}
+      - FW_WHISPER_API_URL=${FW_WHISPER_API_URL:-http://localhost:8000}
       - FW_WHISPER_MODEL=base
     volumes:
       - ./pipeline_data:/app/pipeline_data
       - ./foreign_whispers:/app/foreign_whispers
       - ./api:/app/api
-      - ./cookies.txt:/app/cookies.txt
 
-  # ── Frontend (Next.js) — all profiles ──────────────────────────────
+  # ── Frontend (Next.js) — production build ──────────────────────────
   frontend:
     container_name: foreign-whispers-frontend
     profiles: [nvidia, cpu]
@@ -93,6 +96,24 @@ services:
       retries: 3
       start_period: 15s
 
+  # ── Frontend dev (Next.js) — fast startup, no build step ──────────
+  frontend-dev:
+    container_name: foreign-whispers-frontend-dev
+    profiles: [dev]
+    image: node:22-alpine
+    working_dir: /app
+    command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev"]
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    environment:
+      - API_URL=http://localhost:8080
+      - HOSTNAME=0.0.0.0
+      - PORT=8501
+
 volumes:
   whisper-cache:
   chatterbox-models:
+  frontend-node-modules:
