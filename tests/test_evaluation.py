@@ -1,6 +1,6 @@
 # tests/test_evaluation.py
 from foreign_whispers.alignment import compute_segment_metrics, global_align
-from foreign_whispers.evaluation import clip_evaluation_report
+from foreign_whispers.evaluation import clip_evaluation_report, dubbing_scorecard
 
 
 def _make_transcripts(src_dur=3.0, tgt_chars=30):
@@ -47,3 +47,52 @@ def test_report_empty_inputs():
     report = clip_evaluation_report([], [])
     assert report["mean_abs_duration_error_s"] == 0.0
     assert report["n_gap_shifts"] == 0
+
+
+def test_dubbing_scorecard_keys_present():
+    en, es = _make_transcripts(src_dur=3.0, tgt_chars=15)
+    metrics = compute_segment_metrics(en, es)
+    aligned = global_align(metrics, silence_regions=[])
+    report = clip_evaluation_report(metrics, aligned)
+    scorecard = dubbing_scorecard(metrics, aligned, report)
+    expected_keys = {
+        "timing_accuracy", "stretch_quality", "gap_efficiency", "retry_rate", "drift_score",
+        "naturalness", "intelligibility", "semantic_fidelity", "overall_score", "grade", "report"
+    }
+    assert expected_keys.issubset(set(scorecard.keys()))
+
+
+def test_dubbing_scorecard_stub_keys_are_none():
+    en, es = _make_transcripts(src_dur=3.0, tgt_chars=15)
+    metrics = compute_segment_metrics(en, es)
+    aligned = global_align(metrics, silence_regions=[])
+    report = clip_evaluation_report(metrics, aligned)
+    scorecard = dubbing_scorecard(metrics, aligned, report)
+    assert scorecard["intelligibility"] is None
+    assert scorecard["semantic_fidelity"] is None
+
+
+def test_dubbing_scorecard_grade_a_for_perfect_input():
+    # 1s predicted, 3s duration -> error 2.0. 
+    # timing = 1 - 2.0/3.0 = 0.33. 
+    # Let's create something easier: duration 1.0, chars 4 -> ~1.0s predicted.
+    en = {"segments": [{"start": 0.0, "end": 1.0, "text": "Hi"}]}
+    es = {"segments": [{"start": 0.0, "end": 1.0, "text": "Hola"}]}
+    metrics = compute_segment_metrics(en, es)
+    aligned = global_align(metrics, silence_regions=[])
+    report = clip_evaluation_report(metrics, aligned)
+    scorecard = dubbing_scorecard(metrics, aligned, report)
+    # With perfect duration match, timing accuracy 1.0, stretch 1.0, etc -> overall should be high.
+    assert scorecard["overall_score"] >= 0.85
+    assert scorecard["grade"] == "A"
+
+
+def test_dubbing_scorecard_grade_reflects_high_stretch():
+    en = {"segments": [{"start": float(i), "end": float(i + 1), "text": "hi"} for i in range(5)]}
+    es = {"segments": [{"start": float(i), "end": float(i + 1), "text": "ba" * 50} for i in range(5)]}
+    metrics = compute_segment_metrics(en, es)
+    aligned = global_align(metrics, silence_regions=[])
+    report = clip_evaluation_report(metrics, aligned)
+    scorecard = dubbing_scorecard(metrics, aligned, report)
+    assert scorecard["grade"] != "A"
+

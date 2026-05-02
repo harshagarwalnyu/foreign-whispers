@@ -9,34 +9,42 @@ from foreign_whispers.reranking import analyze_failures, get_shorter_translation
 from foreign_whispers.alignment import (  # noqa: F401
     AlignAction,
     AlignedSegment,
+    DurationPredictor,
     SegmentMetrics,
     compute_segment_metrics,
     decide_action,
     global_align,
+    global_align_dp,
 )
 from foreign_whispers.backends import DurationAwareTTSBackend  # noqa: F401
 from foreign_whispers.client import ALIGNED, BASELINE, FWClient, config_id  # noqa: F401
-from foreign_whispers.diarization import diarize_audio  # noqa: F401
-from foreign_whispers.evaluation import clip_evaluation_report  # noqa: F401
+from foreign_whispers.diarization import assign_speakers, diarize_audio  # noqa: F401
+from foreign_whispers.evaluation import clip_evaluation_report, dubbing_scorecard  # noqa: F401
 from foreign_whispers.vad import detect_speech_activity  # noqa: F401
+from foreign_whispers.voice_resolution import resolve_speaker_wav  # noqa: F401
 
 __all__ = [
     "AlignAction",
     "AlignedSegment",
+    "DurationPredictor",
     "SegmentMetrics",
     "compute_segment_metrics",
     "decide_action",
     "global_align",
+    "global_align_dp",
     "DurationAwareTTSBackend",
     "detect_speech_activity",
+    "assign_speakers",
     "diarize_audio",
     "get_shorter_translations",
     "analyze_failures",
     "TranslationCandidate",
     "FailureAnalysis",
     "clip_evaluation_report",
+    "dubbing_scorecard",
     "FWClient",
     "config_id",
     "BASELINE",
     "ALIGNED",
+    "resolve_speaker_wav",
 ]

@@ -18,6 +18,17 @@ import re
 import unicodedata
 from enum import Enum
 
+_DP_GAP_SHIFT_BOUNDARY: float = 1.55
+_STRETCH_QUALITY_WEIGHT: float = 5.0
+
+
+def _silence_after(end_s: float, silence_regions: list[dict]) -> float:
+    """Return duration of the first silence region starting at or after end_s."""
+    for r in silence_regions:
+        if r.get("label") == "silence" and r["start_s"] >= end_s - 0.1:
+            return r["end_s"] - r["start_s"]
+    return 0.0
+
 
 def _count_syllables(text: str) -> int:
     """Count syllables in target-language text via vowel-cluster counting.
@@ -31,6 +42,59 @@ def _count_syllables(text: str) -> int:
     ascii_text = "".join(c for c in nfkd if not unicodedata.combining(c))
     clusters = re.findall(r"[aeiou]+", ascii_text)
     return max(1, len(clusters))
+
+
+def _estimate_tts_duration(text: str) -> float:
+    """Estimate TTS output duration in seconds for target-language text.
+
+    Weighted blend of two complementary heuristics:
+    - Syllable rate (0.6 weight): Romance languages ~4.5 syllables/second.
+      More linguistically accurate but degrades on long utterances.
+    - Character rate (0.4 weight): ~15 chars/second for Spanish TTS.
+      More stable for long texts where the syllable counter drifts.
+    """
+    syllable_estimate = _count_syllables(text) / 4.5
+    char_estimate = max(1, len(text.strip())) / 15.0
+    return 0.6 * syllable_estimate + 0.4 * char_estimate
+
+
+class DurationPredictor:
+    """Predicts TTS duration for target-language text.
+
+    Two strategies:
+    - 'syllable': syllables / syllable_rate  (default, no calibration needed)
+    - 'regression': linear model on (syllable_count, char_count) with stubbed
+      coefficients — replace COEF_* with values fitted to real TTS ground truth.
+
+    The regression strategy is intentionally stubbed; it requires collecting
+    actual TTS WAV durations (raw_duration_s from .align.json files) and fitting
+    coefficients with e.g. scipy.stats.linregress. See alignment_integration
+    notebook Task 1 for the calibration workflow.
+    """
+
+    # Regression coefficients — replace with calibrated values from TTS ground truth
+    # Derived by: linregress(syllable_counts, actual_durations)
+    # Until calibrated, these match the syllable-rate heuristic at 4.5 syl/s
+    COEF_SYLLABLE: float = 1.0 / 4.5     # seconds per syllable
+    COEF_CHAR:     float = 0.0            # seconds per character (stub — add after calibration)
+    INTERCEPT:     float = 0.0            # stub
+
+    def __init__(self, strategy: str = 'syllable', syllable_rate: float = 4.5) -> None:
+        if strategy not in ('syllable', 'regression'):
+            raise ValueError(f"Unknown strategy {strategy!r}; choose 'syllable' or 'regression'")
+        self.strategy = strategy
+        self.syllable_rate = syllable_rate
+
+    def predict(self, text: str) -> float:
+        """Return predicted TTS duration in seconds for *text*."""
+        n_syl = _count_syllables(text)
+        if self.strategy == 'syllable':
+            return n_syl / self.syllable_rate
+        # regression: weighted combination of syllable count and char count
+        return max(0.1, self.COEF_SYLLABLE * n_syl + self.COEF_CHAR * len(text) + self.INTERCEPT)
+
+
+_DEFAULT_PREDICTOR = DurationPredictor(strategy='syllable')
 
 
 @dataclasses.dataclass
@@ -170,6 +234,7 @@ def decide_action(m: SegmentMetrics, available_gap_s: float = 0.0) -> AlignActio
 def compute_segment_metrics(
     en_transcript: dict,
     es_transcript: dict,
+    predictor: 'DurationPredictor | None' = None,
 ) -> list[SegmentMetrics]:
     """Pair source and target segments and compute per-segment timing metrics.
 
@@ -182,6 +247,9 @@ def compute_segment_metrics(
         en_transcript: Source-language Whisper output dict with
             ``{"segments": [{"start", "end", "text"}, ...]}``.
         es_transcript: Target-language translation dict with the same structure.
+        predictor: Optional DurationPredictor instance.  Defaults to the
+            syllable-rate heuristic.  Pass DurationPredictor(strategy='regression')
+            to use the regression model (requires calibrated coefficients).
 
     Returns:
         List of ``SegmentMetrics``, one per paired segment.  If the transcripts
@@ -193,7 +261,7 @@ def compute_segment_metrics(
     ):
         src_text = en_seg["text"].strip()
         tgt_text = es_seg["text"].strip()
-        metrics.append(SegmentMetrics(
+        m = SegmentMetrics(
             index             = i,
             source_start      = en_seg["start"],
             source_end        = en_seg["end"],
@@ -202,7 +270,15 @@ def compute_segment_metrics(
             translated_text   = tgt_text,
             src_char_count    = len(src_text),
             tgt_char_count    = len(tgt_text),
-        ))
+        )
+        if predictor is not None:
+            m.predicted_tts_s = predictor.predict(m.translated_text)
+            m.predicted_stretch = (
+                m.predicted_tts_s / m.source_duration_s
+                if m.source_duration_s > 0 else 1.0
+            )
+            m.overflow_s = max(0.0, m.predicted_tts_s - m.source_duration_s)
+        metrics.append(m)
     return metrics
 
 
@@ -254,16 +330,10 @@ def global_align(
     Returns:
         One ``AlignedSegment`` per input metric, in order.
     """
-    def _silence_after(end_s: float) -> float:
-        for r in silence_regions:
-            if r.get("label") == "silence" and r["start_s"] >= end_s - 0.1:
-                return r["end_s"] - r["start_s"]
-        return 0.0
-
     aligned, cumulative_drift = [], 0.0
 
     for m in metrics:
-        action    = decide_action(m, available_gap_s=_silence_after(m.source_end))
+        action    = decide_action(m, available_gap_s=_silence_after(m.source_end, silence_regions))
         gap_shift = 0.0
         stretch   = 1.0
 
@@ -286,6 +356,61 @@ def global_align(
             action          = action,
             gap_shift_s     = gap_shift,
             stretch_factor  = stretch,
+        ))
+
+        cumulative_drift += gap_shift
+
+    return aligned
+
+
+def global_align_dp(
+    metrics: list[SegmentMetrics],
+    silence_regions: list[dict],
+    max_stretch: float = 1.4,
+) -> list[AlignedSegment]:
+    """Greedy alignment with DP-based trade-off for GAP_SHIFT vs MILD_STRETCH.
+
+    Improves upon global_align by comparing the global drift impact of
+    GAP_SHIFT against the local audio quality impact of MILD_STRETCH.
+
+    When GAP_SHIFT is suggested but would cause excessive drift (where drift
+    cost > stretch cost), it overrides to MILD_STRETCH.
+    """
+    n = len(metrics)
+    aligned, cumulative_drift = [], 0.0
+
+    for i, m in enumerate(metrics):
+        action = decide_action(m, available_gap_s=_silence_after(m.source_end, silence_regions))
+        gap_shift = 0.0
+        stretch = 1.0
+
+        if action == AlignAction.GAP_SHIFT and 1.4 <= m.predicted_stretch <= _DP_GAP_SHIFT_BOUNDARY:
+            gap_shift_cost = m.overflow_s * (n - i)
+            mild_stretch_cost = (m.predicted_stretch - 1.0) * m.source_duration_s * _STRETCH_QUALITY_WEIGHT
+
+            if gap_shift_cost > mild_stretch_cost:
+                action = AlignAction.MILD_STRETCH
+                stretch = min(m.predicted_stretch, max_stretch)
+            else:
+                gap_shift = m.overflow_s
+        elif action == AlignAction.GAP_SHIFT:
+            gap_shift = m.overflow_s
+        elif action == AlignAction.MILD_STRETCH:
+            stretch = min(m.predicted_stretch, max_stretch)
+
+        sched_start = m.source_start + cumulative_drift
+        sched_end = sched_start + m.source_duration_s + gap_shift
+
+        aligned.append(AlignedSegment(
+            index=m.index,
+            original_start=m.source_start,
+            original_end=m.source_end,
+            scheduled_start=sched_start,
+            scheduled_end=sched_end,
+            text=m.translated_text,
+            action=action,
+            gap_shift_s=gap_shift,
+            stretch_factor=stretch,
         ))
 
         cumulative_drift += gap_shift
