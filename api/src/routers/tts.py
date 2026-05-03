@@ -4,6 +4,7 @@ import asyncio
 import functools
 import json
 import pathlib
+import tempfile
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
@@ -67,10 +68,39 @@ async def tts_endpoint(
 
     source_path = str(trans_dir / f"{title}.json")
 
-    await _run_in_threadpool(
-        None, svc.text_file_to_speech, source_path, str(audio_dir),
-        alignment=alignment, speaker_wav=speaker_wav,
-    )
+    # When diarization data exists and no explicit speaker_wav was supplied,
+    # inject per-segment speaker labels so the TTS engine can switch voices.
+    effective_source = source_path
+    tmp_path: pathlib.Path | None = None
+    diar_path = settings.diarizations_dir / f"{title}.json"
+    if diar_path.exists() and not speaker_wav:
+        try:
+            with open(diar_path) as f:
+                diar_data = json.load(f)
+            diar_segments = diar_data.get("segments", [])
+            if diar_segments and not diar_data.get("skipped", False):
+                from foreign_whispers.diarization import assign_speakers
+                with open(source_path) as f:
+                    trans_data = json.load(f)
+                trans_data["segments"] = assign_speakers(
+                    trans_data.get("segments", []), diar_segments
+                )
+                fd, tmp_str = tempfile.mkstemp(suffix=".json", dir=audio_dir)
+                with open(fd, "w") as tf:
+                    json.dump(trans_data, tf)
+                tmp_path = pathlib.Path(tmp_str)
+                effective_source = tmp_str
+        except Exception:
+            pass
+
+    try:
+        await _run_in_threadpool(
+            None, svc.text_file_to_speech, effective_source, str(audio_dir),
+            alignment=alignment, speaker_wav=speaker_wav,
+        )
+    finally:
+        if tmp_path is not None and tmp_path.exists():
+            tmp_path.unlink()
 
     return {
         "video_id": video_id,

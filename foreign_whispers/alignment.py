@@ -72,12 +72,11 @@ class DurationPredictor:
     notebook Task 1 for the calibration workflow.
     """
 
-    # Regression coefficients — replace with calibrated values from TTS ground truth
-    # Derived by: linregress(syllable_counts, actual_durations)
-    # Until calibrated, these match the syllable-rate heuristic at 4.5 syl/s
-    COEF_SYLLABLE: float = 1.0 / 4.5     # seconds per syllable
+    # Regression coefficients — calibrated via linregress(syllable_counts, actual_durations)
+    # on 2187 ground-truth segments from pipeline_data/api/tts_audio/chatterbox/*.align.json
+    COEF_SYLLABLE: float = 0.1684         # seconds per syllable
     COEF_CHAR:     float = 0.0            # seconds per character (stub — add after calibration)
-    INTERCEPT:     float = 0.0            # stub
+    INTERCEPT:     float = 0.6956
 
     def __init__(self, strategy: str = 'syllable', syllable_rate: float = 4.5) -> None:
         if strategy not in ('syllable', 'regression'):
