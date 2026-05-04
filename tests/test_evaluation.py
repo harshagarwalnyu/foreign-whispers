@@ -69,7 +69,7 @@ def test_dubbing_scorecard_stub_keys_are_none():
     report = clip_evaluation_report(metrics, aligned)
     scorecard = dubbing_scorecard(metrics, aligned, report)
     assert scorecard["intelligibility"] is None
-    assert scorecard["semantic_fidelity"] is None
+    assert scorecard["semantic_fidelity"] == 0.0
 
 
 def test_dubbing_scorecard_grade_a_for_perfect_input():

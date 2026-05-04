@@ -3,6 +3,7 @@
 Extracted from notebooks/foreign_whispers_pipeline.ipynb (M8-align).
 Imports from foreign_whispers.alignment — no other dependencies.
 """
+import difflib as _difflib
 import statistics as _stats
 
 from foreign_whispers.alignment import (
@@ -14,6 +15,53 @@ from foreign_whispers.alignment import (
 _MAX_DURATION_ERROR_S: float = 3.0
 _DRIFT_BUDGET_FRACTION: float = 0.05
 _CV_NATURALNESS_SCALE: float = 2.0
+
+
+def _semantic_fidelity(metrics: list) -> float | None:
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+        import numpy as _np
+        pairs = [(m.source_text, m.translated_text) for m in metrics if m.source_text and m.translated_text]
+        if not pairs:
+            return None
+        src, tgt = zip(*pairs)
+        vec = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=1)
+        mat = vec.fit_transform(list(src) + list(tgt))
+        n = len(src)
+        sims = [float(cosine_similarity(mat[i], mat[n + i])[0, 0]) for i in range(n)]
+        return round(float(_np.mean(sims)), 3)
+    except Exception:
+        return None
+
+
+def _intelligibility(metrics: list, tts_wav_path: str | None, whisper_url: str | None) -> float | None:
+    if not tts_wav_path or not whisper_url:
+        return None
+    import pathlib
+    import requests
+    wav = pathlib.Path(tts_wav_path)
+    if not wav.exists():
+        return None
+    try:
+        with open(wav, 'rb') as f:
+            resp = requests.post(
+                f"{whisper_url}/v1/audio/transcriptions",
+                files={'file': (wav.name, f, 'audio/wav')},
+                data={'model': 'whisper-1', 'language': 'es'},
+                timeout=120,
+            )
+        resp.raise_for_status()
+        stt_text = resp.json().get('text', '')
+        ref_words = ' '.join(m.translated_text for m in metrics if m.translated_text).lower().split()
+        hyp_words = stt_text.lower().split()
+        if not ref_words:
+            return None
+        sm = _difflib.SequenceMatcher(None, ref_words, hyp_words)
+        correct = sum(i2 - i1 for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag == 'equal')
+        return round(max(0.0, 1.0 - (len(ref_words) - correct) / len(ref_words)), 3)
+    except Exception:
+        return None
 
 
 def clip_evaluation_report(
@@ -60,12 +108,14 @@ def dubbing_scorecard(
     metrics: list[SegmentMetrics],
     aligned_segments: list[AlignedSegment],
     align_report: dict,
+    *,
+    tts_wav_path: str | None = None,
+    whisper_url: str | None = None,
 ) -> dict:
     """Return a scorecard dict for alignment quality and performance.
 
-    New stub dimensions (return None until implemented):
-        intelligibility: None (stub) — TTS->STT round-trip WER; requires GPU speech services.
-        semantic_fidelity: None (stub) — embedding cosine similarity EN<->back-translated EN; requires LLM.
+    intelligibility: WER-based score from TTS->STT round-trip. Pass tts_wav_path + whisper_url to activate.
+    semantic_fidelity: Char n-gram TF-IDF cosine similarity between source_text and translated_text per segment.
     """
     n = max(len(metrics), 1)
 
@@ -119,8 +169,8 @@ def dubbing_scorecard(
         "retry_rate": round(retry_rate, 3),
         "drift_score": round(drift_score, 3),
         "naturalness": round(naturalness, 3),
-        "intelligibility": None,
-        "semantic_fidelity": None,
+        "intelligibility": _intelligibility(metrics, tts_wav_path, whisper_url),
+        "semantic_fidelity": _semantic_fidelity(metrics),
         "overall_score": round(overall, 3),
         "grade": grade,
         "report": align_report,
