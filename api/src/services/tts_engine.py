@@ -541,21 +541,30 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
 
     print(f" ({len(segments)} segments synthesized)", end="")
 
-    # ── Phase 2: CPU post-processing (overlay assembly) ──────────────
-    # Pre-allocate silence for the full video duration and overlay each
-    # segment at its correct timestamp. This correctly handles overlapping
-    # translation segments — summing their windows would double the length.
+    # ── Phase 2: CPU post-processing (sequential assembly with clip) ──
+    # Each segment is clipped to the next segment's start time so that
+    # overlapping translation timestamps never cause two voices to mix.
     with tempfile.TemporaryDirectory() as tmpdir:
         if seg_metas:
             total_ms = max(int((m["end"] + offset) * 1000) for m in seg_metas)
         else:
             total_ms = 0
-        combined = AudioSegment.silent(duration=max(total_ms, 1))
+
+        combined = AudioSegment.empty()
+        cursor_ms = 0
         segment_details = []
 
-        for m in seg_metas:
+        for idx, m in enumerate(seg_metas):
             i = m["index"]
             start_ms = max(0, int((m["start"] + offset) * 1000))
+
+            # Max duration for this segment: clip at next segment's start so
+            # overlapping segments never mix (two voices at once).
+            if idx + 1 < len(seg_metas):
+                next_start_ms = max(start_ms, int((seg_metas[idx + 1]["start"] + offset) * 1000))
+                max_seg_ms = next_start_ms - start_ms
+            else:
+                max_seg_ms = max(0, total_ms - start_ms)
 
             seg_audio, seg_speed_factor, seg_raw_duration = _postprocess_segment(
                 raw_wav_map[i], m["target_sec"], m["stretch_factor"],
@@ -573,11 +582,17 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
                 "action": aligned_seg.action.value if aligned_seg and hasattr(aligned_seg, "action") else "unknown",
             })
 
-            if seg_audio is not None:
-                end_ms = start_ms + len(seg_audio)
-                if end_ms > len(combined):
-                    combined += AudioSegment.silent(duration=end_ms - len(combined))
-                combined = combined.overlay(seg_audio, position=start_ms)
+            if seg_audio is not None and max_seg_ms > 0:
+                if len(seg_audio) > max_seg_ms:
+                    seg_audio = seg_audio[:max_seg_ms]
+                if start_ms > cursor_ms:
+                    combined += AudioSegment.silent(duration=start_ms - cursor_ms)
+                    cursor_ms = start_ms
+                combined += seg_audio
+                cursor_ms += len(seg_audio)
+
+        if cursor_ms < total_ms:
+            combined += AudioSegment.silent(duration=total_ms - cursor_ms)
 
         save_path = pathlib.Path(output_path) / save_name
         combined.export(str(save_path), format="wav")
