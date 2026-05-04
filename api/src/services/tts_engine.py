@@ -541,19 +541,21 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
 
     print(f" ({len(segments)} segments synthesized)", end="")
 
-    # ── Phase 2: CPU post-processing (sequential assembly) ────────────
+    # ── Phase 2: CPU post-processing (overlay assembly) ──────────────
+    # Pre-allocate silence for the full video duration and overlay each
+    # segment at its correct timestamp. This correctly handles overlapping
+    # translation segments — summing their windows would double the length.
     with tempfile.TemporaryDirectory() as tmpdir:
-        combined = AudioSegment.empty()
-        cursor_ms = 0
+        if seg_metas:
+            total_ms = max(int((m["end"] + offset) * 1000) for m in seg_metas)
+        else:
+            total_ms = 0
+        combined = AudioSegment.silent(duration=max(total_ms, 1))
         segment_details = []
 
         for m in seg_metas:
             i = m["index"]
-            start_ms = int((m["start"] + offset) * 1000)
-
-            if start_ms > cursor_ms:
-                combined += AudioSegment.silent(duration=start_ms - cursor_ms)
-                cursor_ms = start_ms
+            start_ms = max(0, int((m["start"] + offset) * 1000))
 
             seg_audio, seg_speed_factor, seg_raw_duration = _postprocess_segment(
                 raw_wav_map[i], m["target_sec"], m["stretch_factor"],
@@ -572,8 +574,10 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
             })
 
             if seg_audio is not None:
-                combined += seg_audio
-                cursor_ms += len(seg_audio)
+                end_ms = start_ms + len(seg_audio)
+                if end_ms > len(combined):
+                    combined += AudioSegment.silent(duration=end_ms - len(combined))
+                combined = combined.overlay(seg_audio, position=start_ms)
 
         save_path = pathlib.Path(output_path) / save_name
         combined.export(str(save_path), format="wav")
