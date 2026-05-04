@@ -57,31 +57,65 @@ if _im_bin:
 #     new_clip.write_videofile(os.path.join(destination_folder, "Pink The 60 Minutes Interview.mp4"))
 
 
+def _video_duration(video_path: str) -> float:
+    """Return video duration in seconds via ffprobe."""
+    import subprocess, json
+    result = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", video_path],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        return float(json.loads(result.stdout)["format"]["duration"])
+    return 0.0
+
+
 def stitch_audio(video_path: str, audio_path: str, output_path: str):
     """Replace video audio track with the dubbed audio using ffmpeg remux.
 
     Uses -c:v copy to avoid re-encoding video frames — instant and lossless.
+    Pads the dubbed WAV with silence to match the source video duration so
+    the -shortest flag never trims the last few seconds of the video.
     """
-    import subprocess
+    import subprocess, tempfile
 
     print("Stitching audio (ffmpeg remux)...")
     pathlib.Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-i", audio_path,
-        "-c:v", "copy",        # copy video stream without re-encoding
-        "-map", "0:v:0",       # take video from first input
-        "-map", "1:a:0",       # take audio from second input
-        "-ar", "44100",        # resample to 44100 Hz — Chatterbox outputs 24000 Hz
-        "-ac", "2",            # stereo to match original video
-        "-shortest",           # stop when shortest stream ends
-        output_path,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+    video_dur = _video_duration(video_path)
+
+    # Pad dubbed audio to video duration so -shortest doesn't trim the end.
+    padded_audio = audio_path
+    if video_dur > 0:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            padded_audio = tmp.name
+        pad_cmd = [
+            "ffmpeg", "-y",
+            "-i", audio_path,
+            "-af", f"apad=whole_dur={video_dur}",
+            "-ar", "44100", "-ac", "2",
+            padded_audio,
+        ]
+        pad_result = subprocess.run(pad_cmd, capture_output=True, text=True)
+        if pad_result.returncode != 0:
+            padded_audio = audio_path  # fall back to unpadded on error
+
+    try:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", padded_audio,
+            "-c:v", "copy",        # copy video stream without re-encoding
+            "-map", "0:v:0",       # take video from first input
+            "-map", "1:a:0",       # take audio from second input
+            "-shortest",           # stop at video end (padded audio >= video)
+            output_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed: {result.stderr}")
+    finally:
+        if padded_audio != audio_path:
+            pathlib.Path(padded_audio).unlink(missing_ok=True)
     print("Stitching done.")
 
 

@@ -111,15 +111,21 @@ class ChatterboxClient:
             )
             return self._synthesize_default(text)
 
-        with open(wav_path, "rb") as f:
-            resp = requests.post(
-                f"{self.base_url}/v1/audio/speech/upload",
-                data={"input": text, "response_format": "wav"},
-                files={"voice_file": (wav_path.name, f, "audio/wav")},
-                timeout=(5, int(os.getenv("FW_TTS_TIMEOUT", "180"))),
+        try:
+            with open(wav_path, "rb") as f:
+                resp = requests.post(
+                    f"{self.base_url}/v1/audio/speech/upload",
+                    data={"input": text, "response_format": "wav"},
+                    files={"voice_file": (wav_path.name, f, "audio/wav")},
+                    timeout=(5, int(os.getenv("FW_TTS_TIMEOUT", "180"))),
+                )
+            resp.raise_for_status()
+            return resp.content
+        except Exception as exc:
+            _logging.getLogger(__name__).warning(
+                "[tts] /upload failed (%s), falling back to default voice", exc
             )
-        resp.raise_for_status()
-        return resp.content
+            return self._synthesize_default(text)
 
     @staticmethod
     def _split_text(text: str, max_len: int = 200) -> list[str]:
