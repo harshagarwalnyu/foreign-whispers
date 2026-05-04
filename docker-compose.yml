@@ -88,7 +88,7 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - API_URL=http://localhost:8080
+      - API_URL=http://api:8080
       - HOSTNAME=0.0.0.0
       - PORT=8501
     healthcheck:
