@@ -74,6 +74,8 @@ def stitch_audio(video_path: str, audio_path: str, output_path: str):
         "-c:v", "copy",        # copy video stream without re-encoding
         "-map", "0:v:0",       # take video from first input
         "-map", "1:a:0",       # take audio from second input
+        "-ar", "44100",        # resample to 44100 Hz — Chatterbox outputs 24000 Hz
+        "-ac", "2",            # stereo to match original video
         "-shortest",           # stop when shortest stream ends
         output_path,
     ]

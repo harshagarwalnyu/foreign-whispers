@@ -92,7 +92,7 @@ class ChatterboxClient:
         resp = requests.post(
             f"{self.base_url}/v1/audio/speech",
             json={"input": text, "response_format": "wav"},
-            timeout=(5, 60),
+            timeout=(5, int(os.getenv("FW_TTS_TIMEOUT", "180"))),
         )
         resp.raise_for_status()
         return resp.content
@@ -116,7 +116,7 @@ class ChatterboxClient:
                 f"{self.base_url}/v1/audio/speech/upload",
                 data={"input": text, "response_format": "wav"},
                 files={"voice_file": (wav_path.name, f, "audio/wav")},
-                timeout=(5, 60),
+                timeout=(5, int(os.getenv("FW_TTS_TIMEOUT", "180"))),
             )
         resp.raise_for_status()
         return resp.content
@@ -566,8 +566,13 @@ def text_file_to_speech(source_path, output_path, tts_engine=None, *, alignment=
             else:
                 max_seg_ms = max(0, total_ms - start_ms)
 
+            # Use the actual available slot as the stretch target, not the
+            # original window. Stretching to the full window then clipping to
+            # a tiny slot produces slow-sounding speech.
+            effective_target_sec = max_seg_ms / 1000.0 if max_seg_ms > 0 else m["target_sec"]
+
             seg_audio, seg_speed_factor, seg_raw_duration = _postprocess_segment(
-                raw_wav_map[i], m["target_sec"], m["stretch_factor"],
+                raw_wav_map[i], effective_target_sec, m["stretch_factor"],
                 use_alignment, tmpdir,
             )
 
